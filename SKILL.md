@@ -430,13 +430,22 @@ Run `contentful-pp-cli doctor` to verify setup.
 
 ## Agent Mode
 
-Add `--agent` to any command. Expands to: `--json --compact --no-input --no-color --yes`.
+Add `--agent` to any command. Expands to: `--json --compact --no-input --no-color --yes --unwrap`.
+
+The `--unwrap` part is the highest-leverage agent flag: it strips both the
+`{meta, results}` provenance envelope AND Contentful's list-response wrapper
+(`{sys: {type: "Array"}, total, skip, limit, items: [...]}`), so list commands
+return a plain `[…]` array of items and get commands return the bare object.
+
+A 5-row content-types listing without `--agent` is **~33 KB** of nested wrapper
+JSON. With `--agent`, it's **~600 B**. With `--agent --select sys.id,name`,
+it's **~400 B**. Always use `--agent` for non-interactive callers.
 
 - **Pipeable** — JSON on stdout, errors on stderr
-- **Filterable** — `--select` keeps a subset of fields. Dotted paths descend into nested structures; arrays traverse element-wise. Critical for keeping context small on verbose APIs:
+- **Filterable** — `--select` keeps a subset of fields. Dotted paths descend into nested structures; arrays traverse element-wise. For list responses, the selection is projected across `items` and the array is returned without the envelope (so `--select sys.id,name` on a list returns `[{sys:{id:...},name:...}, ...]`, not the broken `{sys:{}}` shape it returned in early v0.1):
 
   ```bash
-  contentful-pp-cli ai-actions list $CONTENTFUL_SPACE_ID master --agent --select id,name,status
+  contentful-pp-cli ai-actions list $CONTENTFUL_SPACE_ID master --agent --select sys.id,name,description
   ```
 - **Previewable** — `--dry-run` shows the request without sending
 - **Offline-friendly** — sync/search commands can use the local SQLite store when available
@@ -445,16 +454,36 @@ Add `--agent` to any command. Expands to: `--json --compact --no-input --no-colo
 
 ### Response envelope
 
-Commands that read from the local store or the API wrap output in a provenance envelope:
+By default (no `--agent`, no `--unwrap`), commands wrap output in a provenance envelope around Contentful's native shape:
 
-```json
+```jsonc
+// Default --json output (verbose; human/audit-friendly)
 {
-  "meta": {"source": "live" | "local", "synced_at": "...", "reason": "..."},
-  "results": <data>
+  "meta":   { "source": "live" | "local", "synced_at": "...", "reason": "..." },
+  "results": {
+    "sys":   { "type": "Array" },
+    "total": 134,
+    "skip":  0,
+    "limit": 100,
+    "items": [ /* the actual rows */ ]
+  }
 }
 ```
 
-Parse `.results` for data and `.meta.source` to know whether it's live or local. A human-readable `N results (live)` summary is printed to stderr only when stdout is a terminal — piped/agent consumers get pure JSON on stdout.
+Three flags control how much of that envelope reaches stdout:
+
+| Flag set | List output shape | Use case |
+|---|---|---|
+| `--json` only | Full nested envelope above | Audit, human inspection, `--no-cache` debug |
+| `--json --select <paths>` | `{ meta, results: [<filtered items>] }` | Paths project across `items`; envelope stays for source provenance |
+| `--json --compact` | `{ meta, results: [<id+name+type+...> rows] }` | High-gravity allowlist; lifts `sys.id`/`sys.type` to top level |
+| `--agent` (recommended) | `[<compact rows>]` — bare array, no wrapper | Default for any agent / scripted caller |
+| `--agent --select <paths>` | `[<projected items>]` — bare array | When you need specific fields |
+| `--unwrap` (without `--agent`) | Same as `--agent` for the wrapper, but keeps `--compact` opt-in | Manual scripting that wants raw items |
+
+For single-object responses (e.g., `entries get`, `spaces get`), the wrapper just contains the object directly; `--agent`/`--unwrap` strip the wrapper so you get the bare object.
+
+A human-readable `N results (live)` summary is printed to stderr only when stdout is a terminal — piped/agent consumers get pure JSON on stdout.
 
 ## Agent Feedback
 

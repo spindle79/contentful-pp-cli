@@ -424,6 +424,12 @@ func printJSONFiltered(w io.Writer, v any, flags *rootFlags) error {
 // filterFields keeps only the specified fields (comma-separated) from JSON objects/arrays.
 // Supports dotted paths like "events.shortName" to descend into nested structures.
 // Arrays are traversed element-wise: "events.shortName" keeps shortName on each event.
+//
+// For Contentful list responses ({sys: {type: "Array"}, total, skip, limit, items: [...]}),
+// the selection is projected across `items` and the resulting array is returned
+// without the envelope. This is what agents almost always want — paths like
+// `sys.id,name` are item-shaped, not envelope-shaped. To inspect the envelope
+// (total/skip/limit), omit --select.
 func filterFields(data json.RawMessage, fields string) json.RawMessage {
 	var paths [][]string
 	for _, f := range strings.Split(fields, ",") {
@@ -440,7 +446,46 @@ func filterFields(data json.RawMessage, fields string) json.RawMessage {
 	if len(paths) == 0 {
 		return data
 	}
+	if items, isList := unwrapContentfulList(data); isList {
+		out := make([]json.RawMessage, len(items))
+		for i, el := range items {
+			out[i] = filterFieldsRec(el, paths)
+		}
+		result, _ := json.Marshal(out)
+		return result
+	}
 	return filterFieldsRec(data, paths)
+}
+
+// unwrapContentfulList detects Contentful's array-response envelope —
+//
+//	{"sys": {"type": "Array"}, "total": N, "skip": 0, "limit": 100, "items": [...]}
+//
+// — and returns the items array. Returns (nil, false) for shapes that don't
+// match (single objects, errors, custom envelopes). Used to make --select,
+// --compact, and CSV output operate on items the way agents expect.
+func unwrapContentfulList(data json.RawMessage) ([]json.RawMessage, bool) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil, false
+	}
+	sysRaw, hasSys := obj["sys"]
+	itemsRaw, hasItems := obj["items"]
+	if !hasSys || !hasItems {
+		return nil, false
+	}
+	var sysObj map[string]any
+	if err := json.Unmarshal(sysRaw, &sysObj); err != nil {
+		return nil, false
+	}
+	if t, _ := sysObj["type"].(string); t != "Array" {
+		return nil, false
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(itemsRaw, &items); err != nil {
+		return nil, false
+	}
+	return items, true
 }
 
 // filterFieldsRec applies path filters to a JSON value. Each path is a list of
@@ -574,7 +619,22 @@ func extractResponseData(data json.RawMessage) json.RawMessage {
 // compactFields keeps only the most important fields for agent consumption.
 // For arrays: allowlist of high-gravity fields (no descriptions).
 // For single objects: blocklist that strips known-verbose fields (descriptions, comments, etc.).
+// For Contentful list envelopes: projects compactListFields across `items` and
+// returns just the items array, dropping the envelope.
 func compactFields(data json.RawMessage) json.RawMessage {
+	// Contentful list envelope first — strip it and project across items.
+	if itemsRaw, isList := unwrapContentfulList(data); isList {
+		items := make([]map[string]any, 0, len(itemsRaw))
+		for _, raw := range itemsRaw {
+			var m map[string]any
+			if err := json.Unmarshal(raw, &m); err != nil {
+				continue
+			}
+			items = append(items, m)
+		}
+		return compactListFields(items)
+	}
+
 	// Try array first
 	var items []map[string]any
 	if err := json.Unmarshal(data, &items); err == nil {
@@ -591,19 +651,43 @@ func compactFields(data json.RawMessage) json.RawMessage {
 }
 
 // compactListFields keeps only high-gravity fields for array responses.
+//
+// For Contentful items (which have id/type buried under `sys`), the function
+// also lifts `sys.id` and `sys.type` to top-level `id`/`type` keys so a
+// compact row is actually identifying — without this, --compact on an entries
+// list returns a row of mostly-empty objects.
 func compactListFields(items []map[string]any) json.RawMessage {
 	keepFields := map[string]bool{
 		"id": true, "name": true, "title": true, "identifier": true,
 		"status": true, "state": true, "type": true, "priority": true,
 		"url": true, "email": true, "key": true,
+		"code": true, "default": true, "displayField": true, "slug": true,
 		"created_at": true, "updated_at": true, "createdAt": true, "updatedAt": true,
 	}
 
 	filtered := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		compact := map[string]any{}
+		// Lift Contentful's `sys.id` and `sys.type` to top level so compact
+		// rows carry their identifier instead of an empty wrapper.
+		if sys, ok := item["sys"].(map[string]any); ok {
+			if id, ok := sys["id"].(string); ok && id != "" {
+				compact["id"] = id
+			}
+			if t, ok := sys["type"].(string); ok && t != "" {
+				compact["type"] = t
+			}
+			// For entries: surface the content-type id (heavily used).
+			if ct, ok := sys["contentType"].(map[string]any); ok {
+				if ctSys, ok := ct["sys"].(map[string]any); ok {
+					if ctID, ok := ctSys["id"].(string); ok && ctID != "" {
+						compact["contentType"] = ctID
+					}
+				}
+			}
+		}
 		for k, v := range item {
-			if keepFields[k] {
+			if keepFields[k] && compact[k] == nil {
 				compact[k] = v
 			}
 		}
@@ -1220,6 +1304,24 @@ func printProvenance(cmd *cobra.Command, count int, prov DataProvenance) {
 // "invalid character '<'" while still passing the raw payload through to
 // the consumer.
 func wrapWithProvenance(data json.RawMessage, prov DataProvenance) (json.RawMessage, error) {
+	// --unwrap (also implied by --agent) strips both wrappers — the {meta,
+	// results} provenance envelope here, plus any Contentful list envelope
+	// that filterFields/compactFields would have already removed when --select
+	// or --compact is set. The remaining payload is the items array (for list
+	// responses) or the single object (for get responses) — exactly what
+	// agents need, with the smallest token footprint.
+	if globalUnwrap {
+		// If the caller passed raw API data straight through (no select/compact
+		// to do the unwrap), strip the Contentful list envelope here too so
+		// --unwrap stays predictable across every codepath.
+		if items, isList := unwrapContentfulList(data); isList {
+			out, err := json.Marshal(items)
+			if err == nil {
+				return json.RawMessage(out), nil
+			}
+		}
+		return data, nil
+	}
 	meta := map[string]any{"source": prov.Source}
 	if prov.SyncedAt != nil {
 		meta["synced_at"] = prov.SyncedAt.UTC().Format(time.RFC3339)
