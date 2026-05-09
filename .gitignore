@@ -1,0 +1,31 @@
+# Local env files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+.envrc.local
+
+# Build artifacts
+/contentful-pp-cli
+/build/
+*.test
+*.out
+coverage.txt
+
+# Local CI/verify artifacts
+/dogfood-results.json
+/workflow-verify-report.json
+/.printing-press-tools-polish.json
+/.printing-press-tools-polish-history.json
+
+# Local SQLite mirrors and run state (per-machine)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

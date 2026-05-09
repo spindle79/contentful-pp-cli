@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-09T14:33:26.450816Z",
+  "printing_press_version": "4.2.0",
+  "api_name": "contentful",
+  "display_name": "Contentful",
+  "cli_name": "contentful-pp-cli",
+  "owner": "user",
+  "spec_path": "/Users/adamharris/printing-press/.runstate/clis-04d85ed0/runs/20260509-063448/research/contentful-spec.yaml",
+  "spec_format": "internal",
+  "spec_checksum": "sha256:bc86d0092acb68179d4db5cec1451ca7aa94e6e7c2ac8ddc6ad7d36d33f744ae",
+  "run_id": "20260509-063448",
+  "mcp_binary": "contentful-pp-mcp",
+  "mcp_tool_count": 134,
+  "mcp_ready": "full",
+  "api_version": "0.1.0",
+  "auth_type": "bearer_token",
+  "auth_env_vars": [
+    "CONTENTFUL_MANAGEMENT_TOKEN",
+    "CONTENTFUL_DELIVERY_TOKEN",
+    "CONTENTFUL_PREVIEW_TOKEN"
+  ],
+  "novel_features": [
+    {
+      "name": "Orphan detector",
+      "command": "orphans",
+      "description": "Find entries with no incoming references, content types with zero entries, and assets nobody links to — across the entire space, in seconds."
+    },
+    {
+      "name": "Reference graph walker",
+      "command": "refs",
+      "description": "Walk the reference graph forward (what does this entry reference) and reverse (what references this entry) to any depth, offline."
+    },
+    {
+      "name": "Full environment diff",
+      "command": "diff",
+      "description": "Diff two environments across entries, content types, releases, scheduled actions, tags, tasks, and roles — the surfaces contentful-merge skips."
+    },
+    {
+      "name": "Migration generator",
+      "command": "migrate-gen",
+      "description": "Diff two environments and emit a runnable contentful-migration JS script. Inverts the painful 'make changes manually then write a script that mimics them' workflow."
+    },
+    {
+      "name": "Field usage analyzer",
+      "command": "field-usage",
+      "description": "Per-locale fill rate for a field; distribution of value shapes; flags fields defined on a content type that no entry uses."
+    },
+    {
+      "name": "SQL-driven bulk operations",
+      "command": "entries bulk-publish",
+      "description": "Use a SQL WHERE against the local mirror to pick which entries to publish, unpublish, or validate — with --dry-run for safety and rate-aware execution that respects X-Contentful-RateLimit-* headers."
+    },
+    {
+      "name": "Local content validation",
+      "command": "validate-content",
+      "description": "Run the content-type validations (regex, range, in, linkContentType) against the local entries mirror and report violations — no API calls."
+    },
+    {
+      "name": "Broken-reference finder",
+      "command": "refs-broken",
+      "description": "Flags entries whose link fields point at deleted, archived, or unpublished targets — per locale, per environment."
+    },
+    {
+      "name": "Resumable rate-aware migrator",
+      "command": "migrate run --resumable",
+      "description": "Run a contentful-migration script with a local checkpoint table; reads X-Contentful-RateLimit-Reset to time backoff; resumes on crash without re-running completed entries."
+    },
+    {
+      "name": "GraphQL impact analyzer",
+      "command": "gql-impact",
+      "description": "Given a content-type field about to be removed, scan local .graphql/.ts/.tsx files in cwd for queries referencing it and print file:line."
+    },
+    {
+      "name": "Image URL builder with srcset",
+      "command": "images url",
+      "description": "Build images.ctfassets.net URLs with all transforms (w/h/fit/format/quality); --bulk for many assets; --srcset emits ready-to-paste HTML."
+    }
+  ]
+}

@@ -1,0 +1,4056 @@
+name: contentful
+description: "Contentful CLI — every Contentful API command, plus a local SQLite mirror that makes orphan detection, full environment diffs, and SQL-driven bulk publishing one-liners."
+version: "0.1.0"
+base_url: "https://api.contentful.com"
+health_check_path: "/spaces"
+
+# 134 endpoint tools is over the 50-threshold. Use the Cloudflare pattern:
+# - Stdio + HTTP transport so cloud-hosted agents can reach the server.
+# - Code-orchestration (search + execute pair) covers the full surface in ~1K tokens.
+# - Hide raw per-endpoint mirrors so they don't co-exist with the orchestration pair.
+mcp:
+  transport: [stdio, http]
+  orchestration: code
+  endpoint_tools: hidden
+
+required_headers:
+  - name: Content-Type
+    value: "application/vnd.contentful.management.v1+json"
+  - name: X-Contentful-User-Agent
+    value: "contentful-pp-cli/0.1.0"
+
+auth:
+  type: bearer_token
+  header: "Authorization"
+  format: "Bearer {token}"
+  env_vars:
+    - CONTENTFUL_MANAGEMENT_TOKEN
+  in: header
+
+tier_routing:
+  default_tier: cma
+  tiers:
+    cma:
+      auth:
+        type: bearer_token
+        header: "Authorization"
+        format: "Bearer {token}"
+        env_vars: [CONTENTFUL_MANAGEMENT_TOKEN]
+    cda:
+      # Cross-host vs api.contentful.com is intentional — distinct delivery host & token.
+      allow_cross_host_auth: true
+      auth:
+        type: bearer_token
+        header: "Authorization"
+        format: "Bearer {token}"
+        env_vars: [CONTENTFUL_DELIVERY_TOKEN]
+      base_url: "https://cdn.contentful.com"
+    cpa:
+      # Cross-host vs api.contentful.com is intentional — distinct preview host & token.
+      allow_cross_host_auth: true
+      auth:
+        type: bearer_token
+        header: "Authorization"
+        format: "Bearer {token}"
+        env_vars: [CONTENTFUL_PREVIEW_TOKEN]
+      base_url: "https://preview.contentful.com"
+    gql:
+      # Cross-host vs api.contentful.com is intentional — distinct GraphQL host (uses CDA token).
+      allow_cross_host_auth: true
+      auth:
+        type: bearer_token
+        header: "Authorization"
+        format: "Bearer {token}"
+        env_vars: [CONTENTFUL_DELIVERY_TOKEN]
+      base_url: "https://graphql.contentful.com"
+
+config:
+  format: toml
+  path: "~/.config/contentful-pp-cli/config.toml"
+
+resources:
+
+  # ============================================================
+  # CMA TIER (default — uses CONTENTFUL_MANAGEMENT_TOKEN)
+  # ============================================================
+
+  spaces:
+    description: "Manage Contentful spaces (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces"
+        description: "List all spaces accessible to the token"
+        params:
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results (1-1000)"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: Space
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}"
+        description: "Get a space by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+        response:
+          type: object
+          item: Space
+      create:
+        method: POST
+        path: "/spaces"
+        description: "Create a new space"
+        body:
+          - name: name
+            type: string
+            required: true
+            description: "Space name"
+          - name: defaultLocale
+            type: string
+            description: "Default locale code (e.g., en-US)"
+          - name: organizationId
+            type: string
+            description: "Organization ID that will own the space"
+        response:
+          type: object
+          item: Space
+      update:
+        method: PUT
+        path: "/spaces/{space_id}"
+        description: "Update a space (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+        body:
+          - name: name
+            type: string
+            description: "Space name"
+        response:
+          type: object
+          item: Space
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}"
+        description: "Delete a space"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+
+  environments:
+    description: "Manage environments within a space (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments"
+        description: "List environments in a space"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID (or set CONTENTFUL_SPACE_ID)"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: Environment
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}"
+        description: "Get an environment by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        response:
+          type: object
+          item: Environment
+      create:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}"
+        description: "Create an environment (optionally branched from a source)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "New environment ID"
+        body:
+          - name: name
+            type: string
+            required: true
+            description: "Environment display name"
+        response:
+          type: object
+          item: Environment
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}"
+        description: "Delete an environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+
+  environment_aliases:
+    description: "Manage environment aliases (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environment_aliases"
+        description: "List environment aliases"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+        response:
+          type: array
+          item: EnvironmentAlias
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environment_aliases/{alias_id}"
+        description: "Get an environment alias by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: alias_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment alias ID"
+        response:
+          type: object
+          item: EnvironmentAlias
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environment_aliases/{alias_id}"
+        description: "Update an environment alias to point to a different environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: alias_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment alias ID"
+        body:
+          - name: environment.sys.id
+            type: string
+            required: true
+            description: "Target environment ID the alias should point to"
+        response:
+          type: object
+          item: EnvironmentAlias
+
+  content_types:
+    description: "Manage content types (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types"
+        description: "List content types in an environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results (1-1000)"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+          - name: order
+            type: string
+            description: "Order by field (e.g., -sys.updatedAt)"
+        response:
+          type: array
+          item: ContentType
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}"
+        description: "Get a content type by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+        response:
+          type: object
+          item: ContentType
+      create:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}"
+        description: "Create a content type with the given ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID to create"
+        body:
+          - name: name
+            type: string
+            required: true
+            description: "Content type display name"
+          - name: displayField
+            type: string
+            description: "Field ID used as the entry display title"
+          - name: description
+            type: string
+            description: "Content type description"
+          - name: fields
+            type: string
+            required: true
+            description: "Field definitions as JSON array (use @file.json)"
+        response:
+          type: object
+          item: ContentType
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}"
+        description: "Update a content type (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+        body:
+          - name: name
+            type: string
+            description: "Content type display name"
+          - name: displayField
+            type: string
+            description: "Field ID used as the entry display title"
+          - name: description
+            type: string
+            description: "Content type description"
+          - name: fields
+            type: string
+            description: "Field definitions as JSON array"
+        response:
+          type: object
+          item: ContentType
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}"
+        description: "Delete a content type"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+      publish:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}/published"
+        description: "Publish a content type (no body; requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+        response:
+          type: object
+          item: ContentType
+      unpublish:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}/published"
+        description: "Unpublish a content type"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+        response:
+          type: object
+          item: ContentType
+
+  editor_interfaces:
+    description: "Manage editor interfaces (Contentful UI controls per content type) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/editor_interfaces"
+        description: "List editor interfaces in an environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        response:
+          type: array
+          item: EditorInterface
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}/editor_interface"
+        description: "Get the editor interface for a content type"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+        response:
+          type: object
+          item: EditorInterface
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}/editor_interface"
+        description: "Update the editor interface for a content type (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+        body:
+          - name: controls
+            type: string
+            description: "Field control configurations as JSON array"
+          - name: sidebar
+            type: string
+            description: "Sidebar widgets as JSON array"
+        response:
+          type: object
+          item: EditorInterface
+
+  content_type_snapshots:
+    description: "Read content type snapshots (history) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}/snapshots"
+        description: "List snapshots for a content type"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: Snapshot
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}/snapshots/{snapshot_id}"
+        description: "Get a single content type snapshot"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+          - name: snapshot_id
+            type: string
+            required: true
+            positional: true
+            description: "Snapshot ID"
+        response:
+          type: object
+          item: Snapshot
+
+  entries:
+    description: "Manage entries (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries"
+        description: "List entries in an environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID (or set CONTENTFUL_SPACE_ID)"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID (or set CONTENTFUL_ENVIRONMENT_ID)"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max entries (1-1000)"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+          - name: order
+            type: string
+            description: "Order by field (e.g., -sys.updatedAt)"
+          - name: content_type
+            flag_name: content-type
+            type: string
+            description: "Filter by content type ID"
+          - name: query
+            type: string
+            description: "Full-text search query (matches across all string fields)"
+          - name: locale
+            type: string
+            description: "Locale to fetch (use '*' for all locales)"
+          - name: select
+            type: string
+            description: "Comma-separated list of fields to project (e.g., sys.id,fields.title)"
+        response:
+          type: array
+          item: Entry
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}"
+        description: "Get an entry by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: locale
+            type: string
+            description: "Locale to fetch (use '*' for all locales)"
+        response:
+          type: object
+          item: Entry
+      create:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/entries"
+        description: "Create an entry (requires X-Contentful-Content-Type header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        body:
+          - name: fields
+            type: string
+            required: true
+            description: "Entry fields as locale-keyed JSON object (use @file.json)"
+        response:
+          type: object
+          item: Entry
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}"
+        description: "Update an entry (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+        body:
+          - name: fields
+            type: string
+            required: true
+            description: "Entry fields as locale-keyed JSON object"
+        response:
+          type: object
+          item: Entry
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}"
+        description: "Delete an entry"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+      publish:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/published"
+        description: "Publish an entry (no body; requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+        response:
+          type: object
+          item: Entry
+      unpublish:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/published"
+        description: "Unpublish an entry"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+        response:
+          type: object
+          item: Entry
+      archive:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/archived"
+        description: "Archive an entry (no body)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+        response:
+          type: object
+          item: Entry
+      unarchive:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/archived"
+        description: "Unarchive an entry"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+        response:
+          type: object
+          item: Entry
+      references:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/references"
+        description: "Get depth-1 references for an entry (online only — for deep refs use the local mirror)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: include
+            type: int
+            default: 2
+            description: "Inclusion depth (1-10)"
+        response:
+          type: array
+          item: Entry
+        response_path: items
+
+  entry_snapshots:
+    description: "Read entry snapshots (history) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/snapshots"
+        description: "List snapshots for an entry"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: Snapshot
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/snapshots/{snapshot_id}"
+        description: "Get a single entry snapshot"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: snapshot_id
+            type: string
+            required: true
+            positional: true
+            description: "Snapshot ID"
+        response:
+          type: object
+          item: Snapshot
+
+  assets:
+    description: "Manage assets (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/assets"
+        description: "List assets in an environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results (1-1000)"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+          - name: order
+            type: string
+            description: "Order by field (e.g., -sys.updatedAt)"
+          - name: query
+            type: string
+            description: "Full-text search query"
+          - name: locale
+            type: string
+            description: "Locale to fetch"
+        response:
+          type: array
+          item: Asset
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}"
+        description: "Get an asset by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+          - name: locale
+            type: string
+            description: "Locale to fetch"
+        response:
+          type: object
+          item: Asset
+      create:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/assets"
+        description: "Create an asset (metadata only — call assets process to ingest binary)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        body:
+          - name: fields.title
+            type: string
+            description: "Asset title (locale-keyed JSON; pass via @file.json for multi-locale)"
+          - name: fields.description
+            type: string
+            description: "Asset description"
+          - name: fields.file
+            type: string
+            description: "File metadata as JSON ({fileName, contentType, upload|uploadFrom})"
+        response:
+          type: object
+          item: Asset
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}"
+        description: "Update asset metadata (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+        body:
+          - name: fields.title
+            type: string
+            description: "Asset title (locale-keyed JSON)"
+          - name: fields.description
+            type: string
+            description: "Asset description (locale-keyed JSON)"
+          - name: fields.file
+            type: string
+            description: "File metadata as JSON"
+        response:
+          type: object
+          item: Asset
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}"
+        description: "Delete an asset"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+      process:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}/files/{locale}/process"
+        description: "Trigger asset processing for a specific locale (no body)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+          - name: locale
+            type: string
+            required: true
+            positional: true
+            description: "Locale code (e.g., en-US)"
+      publish:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}/published"
+        description: "Publish an asset (no body; requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+        response:
+          type: object
+          item: Asset
+      unpublish:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}/published"
+        description: "Unpublish an asset"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+        response:
+          type: object
+          item: Asset
+      archive:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}/archived"
+        description: "Archive an asset (no body)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+        response:
+          type: object
+          item: Asset
+      unarchive:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}/archived"
+        description: "Unarchive an asset"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+        response:
+          type: object
+          item: Asset
+
+  locales:
+    description: "Manage locales (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/locales"
+        description: "List locales in an environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        response:
+          type: array
+          item: Locale
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/locales/{locale_id}"
+        description: "Get a locale by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: locale_id
+            type: string
+            required: true
+            positional: true
+            description: "Locale ID"
+        response:
+          type: object
+          item: Locale
+      create:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/locales"
+        description: "Create a locale"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        body:
+          - name: name
+            type: string
+            required: true
+            description: "Locale display name (e.g., English (US))"
+          - name: code
+            type: string
+            required: true
+            description: "Locale code (e.g., en-US)"
+          - name: fallbackCode
+            type: string
+            description: "Fallback locale code (or null)"
+          - name: default
+            type: bool
+            description: "Whether this is the default locale"
+          - name: optional
+            type: bool
+            description: "Whether content in this locale is optional"
+          - name: contentManagementApi
+            type: bool
+            default: true
+            description: "Available via the CMA"
+          - name: contentDeliveryApi
+            type: bool
+            default: true
+            description: "Available via the CDA"
+        response:
+          type: object
+          item: Locale
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/locales/{locale_id}"
+        description: "Update a locale (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: locale_id
+            type: string
+            required: true
+            positional: true
+            description: "Locale ID"
+        body:
+          - name: name
+            type: string
+            description: "Locale display name"
+          - name: code
+            type: string
+            description: "Locale code"
+          - name: fallbackCode
+            type: string
+            description: "Fallback locale code"
+          - name: default
+            type: bool
+            description: "Whether this is the default locale"
+          - name: optional
+            type: bool
+            description: "Whether content in this locale is optional"
+          - name: contentManagementApi
+            type: bool
+            description: "Available via the CMA"
+          - name: contentDeliveryApi
+            type: bool
+            description: "Available via the CDA"
+        response:
+          type: object
+          item: Locale
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/locales/{locale_id}"
+        description: "Delete a locale"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: locale_id
+            type: string
+            required: true
+            positional: true
+            description: "Locale ID"
+
+  tags:
+    description: "Manage tags (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/tags"
+        description: "List tags in an environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: Tag
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/tags/{tag_id}"
+        description: "Get a tag by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: tag_id
+            type: string
+            required: true
+            positional: true
+            description: "Tag ID"
+        response:
+          type: object
+          item: Tag
+      create:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/tags/{tag_id}"
+        description: "Create a tag with the given ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: tag_id
+            type: string
+            required: true
+            positional: true
+            description: "Tag ID to create"
+        body:
+          - name: name
+            type: string
+            required: true
+            description: "Tag display name"
+          - name: sys.visibility
+            type: string
+            default: "private"
+            description: "Tag visibility (private | public)"
+            enum: ["private", "public"]
+        response:
+          type: object
+          item: Tag
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/tags/{tag_id}"
+        description: "Update a tag (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: tag_id
+            type: string
+            required: true
+            positional: true
+            description: "Tag ID"
+        body:
+          - name: name
+            type: string
+            description: "Tag display name"
+        response:
+          type: object
+          item: Tag
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/tags/{tag_id}"
+        description: "Delete a tag"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: tag_id
+            type: string
+            required: true
+            positional: true
+            description: "Tag ID"
+
+  scheduled_actions:
+    description: "Manage scheduled actions (publish/unpublish at a future time) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/scheduled_actions"
+        description: "List scheduled actions"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment.sys.id
+            flag_name: environment-id
+            type: string
+            description: "Filter by environment ID (required by API)"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: order
+            type: string
+            description: "Order by field (e.g., scheduledFor.datetime)"
+        response:
+          type: array
+          item: ScheduledAction
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/scheduled_actions/{scheduled_action_id}"
+        description: "Get a scheduled action by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: scheduled_action_id
+            type: string
+            required: true
+            positional: true
+            description: "Scheduled action ID"
+          - name: environment.sys.id
+            flag_name: environment-id
+            type: string
+            required: true
+            description: "Environment ID (required by API)"
+        response:
+          type: object
+          item: ScheduledAction
+      create:
+        method: POST
+        path: "/spaces/{space_id}/scheduled_actions"
+        description: "Schedule a publish or unpublish action"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+        body:
+          - name: entity.sys.id
+            type: string
+            required: true
+            description: "Entity ID to schedule"
+          - name: entity.sys.linkType
+            type: string
+            required: true
+            description: "Entity type (Entry | Asset | Release)"
+            enum: ["Entry", "Asset", "Release"]
+          - name: action
+            type: string
+            required: true
+            description: "Action to schedule"
+            enum: ["publish", "unpublish"]
+          - name: scheduledFor.datetime
+            type: string
+            required: true
+            description: "ISO 8601 datetime to run the action"
+            format: date-time
+          - name: environment.sys.id
+            type: string
+            required: true
+            description: "Environment ID where the action will run"
+        response:
+          type: object
+          item: ScheduledAction
+      cancel:
+        method: DELETE
+        path: "/spaces/{space_id}/scheduled_actions/{scheduled_action_id}"
+        description: "Cancel a scheduled action"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: scheduled_action_id
+            type: string
+            required: true
+            positional: true
+            description: "Scheduled action ID"
+          - name: environment.sys.id
+            flag_name: environment-id
+            type: string
+            required: true
+            description: "Environment ID (required by API)"
+
+  releases:
+    description: "Manage releases (batched publish bundles) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/releases"
+        description: "List releases in an environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+          - name: status
+            type: string
+            description: "Filter by status (active | archived)"
+            enum: ["active", "archived"]
+        response:
+          type: array
+          item: Release
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/releases/{release_id}"
+        description: "Get a release by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: release_id
+            type: string
+            required: true
+            positional: true
+            description: "Release ID"
+        response:
+          type: object
+          item: Release
+      create:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/releases"
+        description: "Create a release"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        body:
+          - name: title
+            type: string
+            required: true
+            description: "Release title"
+          - name: entities.items
+            type: string
+            description: "Array of entity links as JSON (e.g., [{sys:{type:Link,linkType:Entry,id:abc}}])"
+        response:
+          type: object
+          item: Release
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/releases/{release_id}"
+        description: "Update a release (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: release_id
+            type: string
+            required: true
+            positional: true
+            description: "Release ID"
+        body:
+          - name: title
+            type: string
+            description: "Release title"
+          - name: entities.items
+            type: string
+            description: "Array of entity links as JSON"
+        response:
+          type: object
+          item: Release
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/releases/{release_id}"
+        description: "Delete a release"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: release_id
+            type: string
+            required: true
+            positional: true
+            description: "Release ID"
+      publish:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/releases/{release_id}/published"
+        description: "Publish all entities in a release"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: release_id
+            type: string
+            required: true
+            positional: true
+            description: "Release ID"
+        body:
+          - name: action
+            type: string
+            default: "publish"
+            description: "Action (publish | validate)"
+            enum: ["publish", "validate"]
+
+  release_actions:
+    description: "Read async release actions (publish/validate job results) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/releases/{release_id}/actions"
+        description: "List actions performed against a release"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: release_id
+            type: string
+            required: true
+            positional: true
+            description: "Release ID"
+        response:
+          type: array
+          item: ScheduledAction
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/releases/{release_id}/actions/{action_id}"
+        description: "Get a single release action's status and result"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: release_id
+            type: string
+            required: true
+            positional: true
+            description: "Release ID"
+          - name: action_id
+            type: string
+            required: true
+            positional: true
+            description: "Action ID"
+        response:
+          type: object
+          item: ScheduledAction
+
+  webhooks:
+    description: "Manage webhooks (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/webhook_definitions"
+        description: "List webhook definitions"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: Webhook
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/webhook_definitions/{webhook_id}"
+        description: "Get a webhook definition by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: webhook_id
+            type: string
+            required: true
+            positional: true
+            description: "Webhook ID"
+        response:
+          type: object
+          item: Webhook
+      create:
+        method: POST
+        path: "/spaces/{space_id}/webhook_definitions"
+        description: "Create a webhook definition"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+        body:
+          - name: name
+            type: string
+            required: true
+            description: "Webhook name"
+          - name: url
+            type: string
+            required: true
+            description: "Webhook target URL"
+            format: uri
+          - name: topics
+            type: string
+            required: true
+            description: "Topic patterns as JSON array (e.g., [\"Entry.publish\",\"*.delete\"])"
+          - name: headers
+            type: string
+            description: "Custom request headers as JSON array"
+          - name: httpBasicUsername
+            type: string
+            description: "HTTP Basic auth username"
+          - name: httpBasicPassword
+            type: string
+            description: "HTTP Basic auth password (write-only)"
+          - name: transformation
+            type: string
+            description: "Payload transformation config as JSON"
+        response:
+          type: object
+          item: Webhook
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/webhook_definitions/{webhook_id}"
+        description: "Update a webhook (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: webhook_id
+            type: string
+            required: true
+            positional: true
+            description: "Webhook ID"
+        body:
+          - name: name
+            type: string
+            description: "Webhook name"
+          - name: url
+            type: string
+            description: "Webhook target URL"
+            format: uri
+          - name: topics
+            type: string
+            description: "Topic patterns as JSON array"
+          - name: headers
+            type: string
+            description: "Custom request headers as JSON array"
+          - name: httpBasicUsername
+            type: string
+            description: "HTTP Basic auth username"
+          - name: httpBasicPassword
+            type: string
+            description: "HTTP Basic auth password"
+          - name: transformation
+            type: string
+            description: "Payload transformation config as JSON"
+        response:
+          type: object
+          item: Webhook
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/webhook_definitions/{webhook_id}"
+        description: "Delete a webhook"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: webhook_id
+            type: string
+            required: true
+            positional: true
+            description: "Webhook ID"
+      health:
+        method: GET
+        path: "/spaces/{space_id}/webhooks/{webhook_id}/health"
+        description: "Get a webhook's health (success/failure counts)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: webhook_id
+            type: string
+            required: true
+            positional: true
+            description: "Webhook ID"
+        response:
+          type: object
+          item: Webhook
+
+  webhook_calls:
+    description: "Read webhook delivery logs (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/webhooks/{webhook_id}/calls"
+        description: "List recent webhook calls (delivery log)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: webhook_id
+            type: string
+            required: true
+            positional: true
+            description: "Webhook ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: WebhookCall
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/webhooks/{webhook_id}/calls/{call_id}"
+        description: "Get a single webhook call (full request/response)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: webhook_id
+            type: string
+            required: true
+            positional: true
+            description: "Webhook ID"
+          - name: call_id
+            type: string
+            required: true
+            positional: true
+            description: "Call ID"
+        response:
+          type: object
+          item: WebhookCall
+
+  roles:
+    description: "Manage roles (RBAC) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/roles"
+        description: "List roles in a space"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: Role
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/roles/{role_id}"
+        description: "Get a role by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: role_id
+            type: string
+            required: true
+            positional: true
+            description: "Role ID"
+        response:
+          type: object
+          item: Role
+      create:
+        method: POST
+        path: "/spaces/{space_id}/roles"
+        description: "Create a role"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+        body:
+          - name: name
+            type: string
+            required: true
+            description: "Role name"
+          - name: description
+            type: string
+            description: "Role description"
+          - name: policies
+            type: string
+            required: true
+            description: "Access policies as JSON array"
+          - name: permissions
+            type: string
+            description: "Top-level permissions as JSON object"
+        response:
+          type: object
+          item: Role
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/roles/{role_id}"
+        description: "Update a role (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: role_id
+            type: string
+            required: true
+            positional: true
+            description: "Role ID"
+        body:
+          - name: name
+            type: string
+            description: "Role name"
+          - name: description
+            type: string
+            description: "Role description"
+          - name: policies
+            type: string
+            description: "Access policies as JSON array"
+          - name: permissions
+            type: string
+            description: "Top-level permissions as JSON object"
+        response:
+          type: object
+          item: Role
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/roles/{role_id}"
+        description: "Delete a role"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: role_id
+            type: string
+            required: true
+            positional: true
+            description: "Role ID"
+
+  api_keys:
+    description: "Manage delivery API keys (CDA tokens) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/api_keys"
+        description: "List delivery API keys"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: APIKey
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/api_keys/{api_key_id}"
+        description: "Get a delivery API key by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: api_key_id
+            type: string
+            required: true
+            positional: true
+            description: "API key ID"
+        response:
+          type: object
+          item: APIKey
+      create:
+        method: POST
+        path: "/spaces/{space_id}/api_keys"
+        description: "Create a delivery API key"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+        body:
+          - name: name
+            type: string
+            required: true
+            description: "API key name"
+          - name: description
+            type: string
+            description: "API key description"
+          - name: environments
+            type: string
+            description: "Array of environment links as JSON (defaults to master)"
+        response:
+          type: object
+          item: APIKey
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/api_keys/{api_key_id}"
+        description: "Update a delivery API key (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: api_key_id
+            type: string
+            required: true
+            positional: true
+            description: "API key ID"
+        body:
+          - name: name
+            type: string
+            description: "API key name"
+          - name: description
+            type: string
+            description: "API key description"
+          - name: environments
+            type: string
+            description: "Array of environment links as JSON"
+        response:
+          type: object
+          item: APIKey
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/api_keys/{api_key_id}"
+        description: "Delete a delivery API key"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: api_key_id
+            type: string
+            required: true
+            positional: true
+            description: "API key ID"
+
+  preview_api_keys:
+    description: "Read preview API keys (CPA tokens) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/preview_api_keys"
+        description: "List preview API keys"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: APIKey
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/preview_api_keys/{key_id}"
+        description: "Get a preview API key by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: key_id
+            type: string
+            required: true
+            positional: true
+            description: "Preview key ID"
+        response:
+          type: object
+          item: APIKey
+
+  app_installations:
+    description: "Manage app installations in an environment (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/app_installations"
+        description: "List app installations"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        response:
+          type: array
+          item: AppInstallation
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/app_installations/{app_definition_id}"
+        description: "Get an app installation by app definition ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: app_definition_id
+            type: string
+            required: true
+            positional: true
+            description: "App definition ID"
+        response:
+          type: object
+          item: AppInstallation
+      install:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/app_installations/{app_definition_id}"
+        description: "Install or reconfigure an app"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: app_definition_id
+            type: string
+            required: true
+            positional: true
+            description: "App definition ID"
+        body:
+          - name: parameters
+            type: string
+            description: "App-specific install parameters as JSON"
+        response:
+          type: object
+          item: AppInstallation
+      uninstall:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/app_installations/{app_definition_id}"
+        description: "Uninstall an app"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: app_definition_id
+            type: string
+            required: true
+            positional: true
+            description: "App definition ID"
+
+  extensions:
+    description: "Manage UI extensions (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/extensions"
+        description: "List extensions"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        response:
+          type: array
+          item: Extension
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/extensions/{extension_id}"
+        description: "Get an extension by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: extension_id
+            type: string
+            required: true
+            positional: true
+            description: "Extension ID"
+        response:
+          type: object
+          item: Extension
+      create:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/extensions"
+        description: "Create an extension"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        body:
+          - name: extension.name
+            type: string
+            required: true
+            description: "Extension display name"
+          - name: extension.fieldTypes
+            type: string
+            required: true
+            description: "Compatible field types as JSON array"
+          - name: extension.src
+            type: string
+            description: "URL to extension source"
+            format: uri
+          - name: extension.srcdoc
+            type: string
+            description: "Inline HTML source (use instead of src)"
+        response:
+          type: object
+          item: Extension
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/extensions/{extension_id}"
+        description: "Update an extension (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: extension_id
+            type: string
+            required: true
+            positional: true
+            description: "Extension ID"
+        body:
+          - name: extension.name
+            type: string
+            description: "Extension display name"
+          - name: extension.fieldTypes
+            type: string
+            description: "Compatible field types as JSON array"
+          - name: extension.src
+            type: string
+            description: "URL to extension source"
+            format: uri
+          - name: extension.srcdoc
+            type: string
+            description: "Inline HTML source"
+        response:
+          type: object
+          item: Extension
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/extensions/{extension_id}"
+        description: "Delete an extension"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: extension_id
+            type: string
+            required: true
+            positional: true
+            description: "Extension ID"
+
+  ai_actions:
+    description: "Manage AI Actions (LLM-backed entry transformations) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/ai_actions"
+        description: "List AI Actions"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: AIAction
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/ai_actions/{ai_action_id}"
+        description: "Get an AI Action by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: ai_action_id
+            type: string
+            required: true
+            positional: true
+            description: "AI Action ID"
+        response:
+          type: object
+          item: AIAction
+      create:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/ai_actions"
+        description: "Create an AI Action"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        body:
+          - name: name
+            type: string
+            required: true
+            description: "AI Action name"
+          - name: description
+            type: string
+            description: "AI Action description"
+          - name: configuration
+            type: string
+            required: true
+            description: "Model configuration as JSON ({modelType, modelTemperature})"
+          - name: instruction
+            type: string
+            required: true
+            description: "Instruction template (with {{variables}}) as JSON ({template, variables})"
+          - name: testCases
+            type: string
+            description: "Test cases as JSON array"
+        response:
+          type: object
+          item: AIAction
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/ai_actions/{ai_action_id}"
+        description: "Update an AI Action (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: ai_action_id
+            type: string
+            required: true
+            positional: true
+            description: "AI Action ID"
+        body:
+          - name: name
+            type: string
+            description: "AI Action name"
+          - name: description
+            type: string
+            description: "AI Action description"
+          - name: configuration
+            type: string
+            description: "Model configuration as JSON"
+          - name: instruction
+            type: string
+            description: "Instruction template as JSON"
+          - name: testCases
+            type: string
+            description: "Test cases as JSON array"
+        response:
+          type: object
+          item: AIAction
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/ai_actions/{ai_action_id}"
+        description: "Delete an AI Action"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: ai_action_id
+            type: string
+            required: true
+            positional: true
+            description: "AI Action ID"
+      publish:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/ai_actions/{ai_action_id}/published"
+        description: "Publish an AI Action (no body; requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: ai_action_id
+            type: string
+            required: true
+            positional: true
+            description: "AI Action ID"
+        response:
+          type: object
+          item: AIAction
+      unpublish:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/ai_actions/{ai_action_id}/published"
+        description: "Unpublish an AI Action"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: ai_action_id
+            type: string
+            required: true
+            positional: true
+            description: "AI Action ID"
+        response:
+          type: object
+          item: AIAction
+      invoke:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/ai_actions/{ai_action_id}/invoke"
+        description: "Invoke an AI Action (returns an invocation ID; poll with invocation)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: ai_action_id
+            type: string
+            required: true
+            positional: true
+            description: "AI Action ID"
+        body:
+          - name: outputFormat
+            type: string
+            default: "Markdown"
+            description: "Output format"
+            enum: ["Markdown", "PlainText", "RichText"]
+          - name: variables
+            type: string
+            required: true
+            description: "Variable bindings as JSON array ([{id, value}])"
+        response:
+          type: object
+          item: AIAction
+      invocation:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/ai_actions/{ai_action_id}/invocations/{invocation_id}"
+        description: "Get an AI Action invocation result by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: ai_action_id
+            type: string
+            required: true
+            positional: true
+            description: "AI Action ID"
+          - name: invocation_id
+            type: string
+            required: true
+            positional: true
+            description: "Invocation ID"
+        response:
+          type: object
+          item: AIAction
+
+  comments:
+    description: "Manage entry comments (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/comments"
+        description: "List comments on an entry"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+          - name: status
+            type: string
+            description: "Filter by status (active | resolved)"
+            enum: ["active", "resolved"]
+        response:
+          type: array
+          item: Comment
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/comments/{comment_id}"
+        description: "Get a comment by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: comment_id
+            type: string
+            required: true
+            positional: true
+            description: "Comment ID"
+        response:
+          type: object
+          item: Comment
+      create:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/comments"
+        description: "Create a comment on an entry"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+        body:
+          - name: body
+            type: string
+            required: true
+            description: "Comment body (markdown supported)"
+          - name: status
+            type: string
+            description: "Comment status"
+            enum: ["active", "resolved"]
+        response:
+          type: object
+          item: Comment
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/comments/{comment_id}"
+        description: "Update a comment (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: comment_id
+            type: string
+            required: true
+            positional: true
+            description: "Comment ID"
+        body:
+          - name: body
+            type: string
+            description: "Comment body"
+          - name: status
+            type: string
+            description: "Comment status"
+            enum: ["active", "resolved"]
+        response:
+          type: object
+          item: Comment
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/comments/{comment_id}"
+        description: "Delete a comment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: comment_id
+            type: string
+            required: true
+            positional: true
+            description: "Comment ID"
+
+  tasks:
+    description: "Manage entry tasks (workflow assignments) (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/tasks"
+        description: "List tasks on an entry"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: Task
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/tasks/{task_id}"
+        description: "Get a task by ID"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: task_id
+            type: string
+            required: true
+            positional: true
+            description: "Task ID"
+        response:
+          type: object
+          item: Task
+      create:
+        method: POST
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/tasks"
+        description: "Create a task on an entry"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+        body:
+          - name: body
+            type: string
+            required: true
+            description: "Task description"
+          - name: assignedTo.sys.id
+            type: string
+            required: true
+            description: "Assignee user ID"
+          - name: status
+            type: string
+            default: "active"
+            description: "Task status"
+            enum: ["active", "resolved"]
+          - name: dueDate
+            type: string
+            description: "Due date (ISO 8601)"
+            format: date-time
+        response:
+          type: object
+          item: Task
+      update:
+        method: PUT
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/tasks/{task_id}"
+        description: "Update a task (requires X-Contentful-Version header)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: task_id
+            type: string
+            required: true
+            positional: true
+            description: "Task ID"
+        body:
+          - name: body
+            type: string
+            description: "Task description"
+          - name: assignedTo.sys.id
+            type: string
+            description: "Assignee user ID"
+          - name: status
+            type: string
+            description: "Task status"
+            enum: ["active", "resolved"]
+          - name: dueDate
+            type: string
+            description: "Due date (ISO 8601)"
+            format: date-time
+        response:
+          type: object
+          item: Task
+      delete:
+        method: DELETE
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}/tasks/{task_id}"
+        description: "Delete a task"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: task_id
+            type: string
+            required: true
+            positional: true
+            description: "Task ID"
+
+  organizations:
+    description: "Read organizations (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/organizations"
+        description: "List organizations the token can access"
+        params:
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: Organization
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/organizations/{organization_id}"
+        description: "Get an organization by ID"
+        params:
+          - name: organization_id
+            type: string
+            required: true
+            positional: true
+            description: "Organization ID"
+        response:
+          type: object
+          item: Organization
+
+  organization_memberships:
+    description: "Read organization memberships (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/organizations/{organization_id}/organization_memberships"
+        description: "List members of an organization"
+        params:
+          - name: organization_id
+            type: string
+            required: true
+            positional: true
+            description: "Organization ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: OrganizationMembership
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+
+  space_memberships:
+    description: "Read space memberships (CMA)"
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/space_memberships"
+        description: "List members of a space"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: SpaceMembership
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+
+  users:
+    description: "Read user info (CMA)"
+    endpoints:
+      me:
+        method: GET
+        path: "/users/me"
+        description: "Get the authenticated user's profile"
+        response:
+          type: object
+          item: User
+
+  # ============================================================
+  # CDA TIER (uses CONTENTFUL_DELIVERY_TOKEN, base cdn.contentful.com)
+  # ============================================================
+
+  delivery_entries:
+    description: "Read published entries via the Content Delivery API (CDA tier — needs CONTENTFUL_DELIVERY_TOKEN)"
+    tier: cda
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries"
+        description: "List published entries (CDA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max entries (1-1000)"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+          - name: order
+            type: string
+            description: "Order by field (e.g., -sys.updatedAt)"
+          - name: content_type
+            flag_name: content-type
+            type: string
+            description: "Filter by content type ID"
+          - name: query
+            type: string
+            description: "Full-text search query"
+          - name: locale
+            type: string
+            description: "Locale to fetch (use '*' for all locales)"
+          - name: select
+            type: string
+            description: "Comma-separated list of fields to project"
+          - name: include
+            type: int
+            default: 1
+            description: "Inclusion depth for linked entries (0-10)"
+        response:
+          type: array
+          item: Entry
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}"
+        description: "Get a published entry by ID (CDA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: locale
+            type: string
+            description: "Locale to fetch"
+        response:
+          type: object
+          item: Entry
+
+  delivery_assets:
+    description: "Read published assets via the Content Delivery API (CDA tier)"
+    tier: cda
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/assets"
+        description: "List published assets (CDA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max assets"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+          - name: order
+            type: string
+            description: "Order by field"
+          - name: query
+            type: string
+            description: "Full-text search query"
+          - name: locale
+            type: string
+            description: "Locale to fetch"
+        response:
+          type: array
+          item: Asset
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}"
+        description: "Get a published asset by ID (CDA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+          - name: locale
+            type: string
+            description: "Locale to fetch"
+        response:
+          type: object
+          item: Asset
+
+  delivery_content_types:
+    description: "Read content types via the Content Delivery API (CDA tier)"
+    tier: cda
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types"
+        description: "List content types (CDA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max results"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+        response:
+          type: array
+          item: ContentType
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/content_types/{content_type_id}"
+        description: "Get a content type by ID (CDA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: content_type_id
+            type: string
+            required: true
+            positional: true
+            description: "Content type ID"
+        response:
+          type: object
+          item: ContentType
+
+  delivery_locales:
+    description: "Read locales via the Content Delivery API (CDA tier)"
+    tier: cda
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/locales"
+        description: "List locales (CDA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        response:
+          type: array
+          item: Locale
+        response_path: items
+
+  delivery_sync:
+    description: "CDA full + incremental sync (drives the local SQLite mirror) (CDA tier). Surfaced as 'delivery-sync' to avoid collision with the built-in 'sync' command that hydrates the local mirror."
+    tier: cda
+    endpoints:
+      run:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/sync"
+        description: "Full or incremental sync. Use --initial=true once, then --sync-token from the prior nextSyncToken."
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: initial
+            type: bool
+            description: "Start a fresh full sync (cannot combine with sync_token)"
+          - name: sync_token
+            flag_name: sync-token
+            type: string
+            description: "Previous nextSyncToken to resume incremental sync"
+          - name: type
+            type: string
+            description: "Limit to a single entity type (Entry|Asset|Deletion|DeletedEntry|DeletedAsset)"
+          - name: content_type
+            flag_name: content-type
+            type: string
+            description: "Limit Entry sync to a specific content type"
+          - name: resolveLinks
+            type: bool
+            default: true
+            description: "Resolve linked entries inline"
+        response:
+          type: object
+          item: SyncResponse
+        pagination:
+          type: cursor
+          cursor_field: nextPageUrl
+          has_more_field: nextPageUrl
+
+  # ============================================================
+  # CPA TIER (uses CONTENTFUL_PREVIEW_TOKEN, base preview.contentful.com)
+  # ============================================================
+
+  preview_entries:
+    description: "Read draft + published entries via the Content Preview API (CPA tier — needs CONTENTFUL_PREVIEW_TOKEN)"
+    tier: cpa
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries"
+        description: "List entries including drafts (CPA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max entries (1-1000)"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+          - name: order
+            type: string
+            description: "Order by field"
+          - name: content_type
+            flag_name: content-type
+            type: string
+            description: "Filter by content type ID"
+          - name: query
+            type: string
+            description: "Full-text search query"
+          - name: locale
+            type: string
+            description: "Locale to fetch"
+          - name: select
+            type: string
+            description: "Comma-separated list of fields to project"
+          - name: include
+            type: int
+            default: 1
+            description: "Inclusion depth for linked entries (0-10)"
+        response:
+          type: array
+          item: Entry
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}"
+        description: "Get an entry including drafts by ID (CPA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: entry_id
+            type: string
+            required: true
+            positional: true
+            description: "Entry ID"
+          - name: locale
+            type: string
+            description: "Locale to fetch"
+        response:
+          type: object
+          item: Entry
+
+  preview_assets:
+    description: "Read draft + published assets via the Content Preview API (CPA tier)"
+    tier: cpa
+    endpoints:
+      list:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/assets"
+        description: "List assets including drafts (CPA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: limit
+            type: int
+            default: 100
+            description: "Max assets"
+          - name: skip
+            type: int
+            default: 0
+            description: "Pagination offset"
+          - name: order
+            type: string
+            description: "Order by field"
+          - name: query
+            type: string
+            description: "Full-text search query"
+          - name: locale
+            type: string
+            description: "Locale to fetch"
+        response:
+          type: array
+          item: Asset
+        pagination:
+          type: offset
+          has_more_field: total
+        response_path: items
+      get:
+        method: GET
+        path: "/spaces/{space_id}/environments/{environment_id}/assets/{asset_id}"
+        description: "Get a draft+published asset by ID (CPA)"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+          - name: asset_id
+            type: string
+            required: true
+            positional: true
+            description: "Asset ID"
+          - name: locale
+            type: string
+            description: "Locale to fetch"
+        response:
+          type: object
+          item: Asset
+
+  # ============================================================
+  # GraphQL TIER (uses CONTENTFUL_DELIVERY_TOKEN, base graphql.contentful.com)
+  # ============================================================
+
+  gql:
+    description: "Execute GraphQL queries via the Contentful GraphQL Content API (gql tier)"
+    tier: gql
+    endpoints:
+      query:
+        method: POST
+        path: "/content/v1/spaces/{space_id}/environments/{environment_id}"
+        description: "Run a GraphQL query against a space+environment"
+        params:
+          - name: space_id
+            type: string
+            required: true
+            positional: true
+            description: "Space ID"
+          - name: environment_id
+            type: string
+            required: true
+            positional: true
+            description: "Environment ID"
+        body:
+          - name: query
+            type: string
+            required: true
+            description: "GraphQL query string (use @file.graphql)"
+          - name: variables
+            type: string
+            description: "GraphQL variables as JSON string"
+          - name: operationName
+            flag_name: operation-name
+            type: string
+            description: "Operation name when query has multiple operations"
+
+types:
+
+  SysObject:
+    fields:
+      - name: id
+        type: string
+      - name: type
+        type: string
+      - name: version
+        type: int
+      - name: createdAt
+        type: string
+      - name: updatedAt
+        type: string
+      - name: publishedAt
+        type: string
+      - name: publishedVersion
+        type: int
+      - name: archivedAt
+        type: string
+      - name: archivedVersion
+        type: int
+      - name: space
+        type: string
+      - name: environment
+        type: string
+      - name: contentType
+        type: string
+
+  Entry:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: fields
+        type: string
+      - name: metadata
+        type: string
+
+  Asset:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: fields
+        type: string
+
+  ContentType:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+      - name: description
+        type: string
+      - name: displayField
+        type: string
+      - name: fields
+        type: string
+
+  Space:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+
+  Environment:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+
+  Locale:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+      - name: code
+        type: string
+      - name: fallbackCode
+        type: string
+      - name: default
+        type: bool
+      - name: optional
+        type: bool
+
+  Tag:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+
+  Webhook:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+      - name: url
+        type: string
+      - name: topics
+        type: string
+      - name: httpBasicUsername
+        type: string
+      - name: transformation
+        type: string
+
+  Role:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+      - name: description
+        type: string
+
+  APIKey:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+      - name: description
+        type: string
+      - name: accessToken
+        type: string
+      - name: environments
+        type: string
+
+  Release:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: title
+        type: string
+      - name: entities
+        type: string
+
+  ScheduledAction:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: entity
+        type: string
+      - name: action
+        type: string
+      - name: scheduledFor
+        type: string
+      - name: status
+        type: string
+
+  AIAction:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+      - name: description
+        type: string
+      - name: configuration
+        type: string
+      - name: instruction
+        type: string
+
+  Comment:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: body
+        type: string
+      - name: status
+        type: string
+
+  Task:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: body
+        type: string
+      - name: assignedTo
+        type: string
+      - name: status
+        type: string
+      - name: dueDate
+        type: string
+
+  User:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: firstName
+        type: string
+      - name: lastName
+        type: string
+      - name: email
+        type: string
+      - name: avatarUrl
+        type: string
+
+  Organization:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: name
+        type: string
+
+  WebhookCall:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: request
+        type: string
+      - name: response
+        type: string
+      - name: statusCode
+        type: int
+
+  SyncResponse:
+    fields:
+      - name: items
+        type: string
+      - name: nextSyncToken
+        type: string
+      - name: nextPageUrl
+        type: string
+
+  Snapshot:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: snapshot
+        type: string
+
+  EditorInterface:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: controls
+        type: string
+      - name: sidebar
+        type: string
+
+  Extension:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: extension
+        type: string
+
+  AppInstallation:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: parameters
+        type: string
+
+  OrganizationMembership:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: role
+        type: string
+      - name: status
+        type: string
+
+  SpaceMembership:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: admin
+        type: bool
+      - name: roles
+        type: string
+
+  EnvironmentAlias:
+    fields:
+      - name: sys
+        type: SysObject
+      - name: environment
+        type: string

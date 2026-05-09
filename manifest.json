@@ -1,0 +1,55 @@
+{
+  "manifest_version": "0.3",
+  "name": "contentful-pp-mcp",
+  "display_name": "Contentful",
+  "version": "4.2.0",
+  "description": "Contentful API surface as MCP tools.",
+  "author": {
+    "name": "CLI Printing Press"
+  },
+  "license": "Apache-2.0",
+  "server": {
+    "type": "binary",
+    "entry_point": "bin/contentful-pp-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/bin/contentful-pp-mcp",
+      "args": [],
+      "env": {
+        "CONTENTFUL_DELIVERY_TOKEN": "${user_config.contentful_delivery_token}",
+        "CONTENTFUL_MANAGEMENT_TOKEN": "${user_config.contentful_management_token}",
+        "CONTENTFUL_PREVIEW_TOKEN": "${user_config.contentful_preview_token}"
+      }
+    }
+  },
+  "user_config": {
+    "contentful_delivery_token": {
+      "type": "string",
+      "title": "CONTENTFUL_DELIVERY_TOKEN",
+      "description": "Sets CONTENTFUL_DELIVERY_TOKEN for the Contentful MCP server.",
+      "sensitive": true,
+      "required": true
+    },
+    "contentful_management_token": {
+      "type": "string",
+      "title": "CONTENTFUL_MANAGEMENT_TOKEN",
+      "description": "Sets CONTENTFUL_MANAGEMENT_TOKEN for the Contentful MCP server.",
+      "sensitive": true,
+      "required": true
+    },
+    "contentful_preview_token": {
+      "type": "string",
+      "title": "CONTENTFUL_PREVIEW_TOKEN",
+      "description": "Sets CONTENTFUL_PREVIEW_TOKEN for the Contentful MCP server.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ]
+  }
+}
