@@ -42,9 +42,9 @@ checksum:
 brews:
   - name: contentful-pp-cli
     repository:
-      owner: user
+      owner: spindle79
       name: homebrew-tap
-    homepage: "https://github.com/user/contentful-pp-cli"
+    homepage: "https://github.com/spindle79/contentful-pp-cli"
     description: "Every Contentful API command, plus a local SQLite mirror that makes orphan detection, full environment diffs, and..."
     install: |
       bin.install "contentful-pp-cli"

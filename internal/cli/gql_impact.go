@@ -1,4 +1,4 @@
-// Copyright 2026 user. Licensed under Apache-2.0. See LICENSE.
+// Copyright 2026 Adam Harris. Licensed under Apache-2.0. See LICENSE.
 //
 // pp:novel-static-reference
 // gql-impact is a local-filesystem analysis tool: it walks the user's working

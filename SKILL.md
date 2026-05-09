@@ -1,7 +1,7 @@
 ---
 name: pp-contentful
 description: "Every Contentful API command, plus a local SQLite mirror that makes orphan detection, full environment diffs, and... Trigger phrases: `find orphans in contentful`, `diff contentful environments`, `generate a contentful migration`, `bulk publish contentful entries`, `build a contentful image url`, `use contentful-pp-cli`, `run contentful-pp-cli`."
-author: "user"
+author: "spindle79"
 license: "Apache-2.0"
 argument-hint: "<command> [args] | install cli|mcp"
 allowed-tools: "Read Bash"
