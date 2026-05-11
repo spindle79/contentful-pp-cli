@@ -14,6 +14,10 @@ metadata:
 
 # Contentful — Printing Press CLI
 
+> Contentful isn't just a headless CMS. It's a graph of references, locales, and publish state — every entry is a signal about content health.
+
+The compound commands below (`orphans`, `refs-broken`, `field-usage`, `migrate-gen`, `webhooks health`, etc.) are natural extensions of that graph: each one walks the local mirror to answer a question the per-endpoint commands cannot answer in a single call.
+
 ## Prerequisites: Install the CLI
 
 This skill drives the `contentful-pp-cli` binary. **You must verify the CLI is installed before invoking any command from this skill.** If it is missing, install it first:
@@ -527,15 +531,16 @@ Explicit flags always win over profile values; profile values win over defaults.
 
 ## Exit Codes
 
+Printing Press convention — all printed CLIs share this mapping.
+
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 2 | Usage error (wrong arguments) |
-| 3 | Resource not found |
-| 4 | Authentication required |
-| 5 | API error (upstream issue) |
-| 7 | Rate limited (wait and retry) |
-| 10 | Config error |
+| 2 | Usage error (wrong arguments or invalid config) |
+| 3 | Authentication required (token missing, expired, or lacks scope) |
+| 4 | Resource not found |
+| 5 | Rate limited (wait and retry) |
+| 7 | Upstream server error |
 
 ## Argument Parsing
 

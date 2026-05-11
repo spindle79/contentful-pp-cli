@@ -15,6 +15,7 @@ import (
 
 	"contentful-pp-cli/internal/client"
 	"contentful-pp-cli/internal/config"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -188,6 +189,19 @@ See README.md or the bundled SKILL.md for recipes.`,
 				flags.unwrap = true
 			}
 		}
+		// Auto-JSON when stdout is piped. Agents and shell pipelines almost
+		// always want machine-readable output; defaulting to JSON when the
+		// caller did not explicitly opt in (and stdout is not a TTY) removes
+		// the need to remember --json in every invocation. Explicit
+		// --json=false still wins because cmd.Flags().Changed reports true
+		// for any user-supplied value.
+		//
+		// --compact is intentionally NOT auto-flipped — it's an opt-in
+		// shape change (drops description/body/content), not a transport
+		// default.
+		if !cmd.Flags().Changed("json") && !isatty.IsTerminal(os.Stdout.Fd()) {
+			flags.asJSON = true
+		}
 		// Mirror to package-level so output helpers (which don't take *rootFlags)
 		// can honor --unwrap without touching every list command's call site.
 		globalUnwrap = flags.unwrap
@@ -242,6 +256,7 @@ See README.md or the bundled SKILL.md for recipes.`,
 	rootCmd.AddCommand(newExportCmd(flags))
 	rootCmd.AddCommand(newImportCmd(flags))
 	rootCmd.AddCommand(newSearchCmd(flags))
+	rootCmd.AddCommand(newSqlCmd(flags))
 	rootCmd.AddCommand(newSyncCmd(flags))
 	rootCmd.AddCommand(newTailCmd(flags))
 	rootCmd.AddCommand(newAnalyticsCmd(flags))

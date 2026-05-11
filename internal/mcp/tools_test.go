@@ -6,6 +6,8 @@ package mcp
 import (
 	"strings"
 	"testing"
+
+	"contentful-pp-cli/internal/cliutil"
 )
 
 // TestValidateReadOnlyQuery_AllowsSelectAndWITH pins the contract: the MCP
@@ -32,8 +34,8 @@ func TestValidateReadOnlyQuery_AllowsSelectAndWITH(t *testing.T) {
 		"with r as (select 1) select * from r",
 	}
 	for _, q := range allowed {
-		if err := validateReadOnlyQuery(q); err != nil {
-			t.Errorf("validateReadOnlyQuery(%q) = %v, want nil", q, err)
+		if err := cliutil.ValidateReadOnlyQuery(q); err != nil {
+			t.Errorf("cliutil.ValidateReadOnlyQuery(%q) = %v, want nil", q, err)
 		}
 	}
 }
@@ -73,8 +75,8 @@ func TestValidateReadOnlyQuery_RejectsBypassVectors(t *testing.T) {
 		";",
 	}
 	for _, q := range rejected {
-		if err := validateReadOnlyQuery(q); err == nil {
-			t.Errorf("validateReadOnlyQuery(%q) = nil, want error", q)
+		if err := cliutil.ValidateReadOnlyQuery(q); err == nil {
+			t.Errorf("cliutil.ValidateReadOnlyQuery(%q) = nil, want error", q)
 		}
 	}
 }
@@ -82,7 +84,7 @@ func TestValidateReadOnlyQuery_RejectsBypassVectors(t *testing.T) {
 // TestStripLeadingSQLNoise checks the helper directly so a regression in the
 // stripping logic (off-by-one on /* */ length, missing newline handling on
 // --) surfaces close to the source rather than only via the integration
-// behavior of validateReadOnlyQuery.
+// behavior of cliutil.ValidateReadOnlyQuery.
 func TestStripLeadingSQLNoise(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -102,9 +104,9 @@ func TestStripLeadingSQLNoise(t *testing.T) {
 		{"", ""},
 	}
 	for _, c := range cases {
-		got := stripLeadingSQLNoise(c.in)
+		got := cliutil.StripLeadingSQLNoise(c.in)
 		if !strings.EqualFold(got, c.want) {
-			t.Errorf("stripLeadingSQLNoise(%q) = %q, want %q", c.in, got, c.want)
+			t.Errorf("cliutil.StripLeadingSQLNoise(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

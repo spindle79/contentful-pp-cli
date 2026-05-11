@@ -93,12 +93,18 @@ type cliError struct {
 func (e *cliError) Error() string { return e.err.Error() }
 func (e *cliError) Unwrap() error { return e.err }
 
+// Exit codes follow the Printing Press convention:
+//
+//	0 success, 2 usage, 3 auth, 4 not-found, 5 rate-limit, 7 server
+//
+// Config errors are folded into the usage code (2) — a missing or malformed
+// config file is a user-side mistake, not a transport failure.
 func usageErr(err error) error     { return &cliError{code: 2, err: err} }
-func notFoundErr(err error) error  { return &cliError{code: 3, err: err} }
-func authErr(err error) error      { return &cliError{code: 4, err: err} }
-func apiErr(err error) error       { return &cliError{code: 5, err: err} }
-func configErr(err error) error    { return &cliError{code: 10, err: err} }
-func rateLimitErr(err error) error { return &cliError{code: 7, err: err} }
+func authErr(err error) error      { return &cliError{code: 3, err: err} }
+func notFoundErr(err error) error  { return &cliError{code: 4, err: err} }
+func rateLimitErr(err error) error { return &cliError{code: 5, err: err} }
+func serverErr(err error) error    { return &cliError{code: 7, err: err} }
+func configErr(err error) error    { return &cliError{code: 2, err: err} }
 
 // dryRunOK reports whether the command should short-circuit without doing any
 // real work because --dry-run was set. The verify pipeline probes hand-written
@@ -225,7 +231,7 @@ func classifyAPIError(err error, flags *rootFlags) error {
 		if flags != nil && flags.idempotent {
 			return writeNoop(flags, "already_exists", "already exists (no-op)")
 		}
-		classified := apiErr(err)
+		classified := serverErr(err)
 		writeAPIErrorEnvelope(flags, classified, ExitCode(classified))
 		return classified
 	case strings.Contains(msg, "HTTP 400") && cliutil.LooksLikeAuthError(msg):
@@ -247,7 +253,7 @@ func classifyAPIError(err error, flags *rootFlags) error {
 	case strings.Contains(msg, "HTTP 429"):
 		return rateLimitErr(err)
 	default:
-		return apiErr(err)
+		return serverErr(err)
 	}
 }
 

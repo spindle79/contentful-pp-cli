@@ -1,5 +1,9 @@
 # Contentful CLI
 
+> Contentful isn't just a headless CMS. It's a graph of references, locales, and publish state — every entry is a signal about content health.
+
+That reframe is why this CLI ships `orphans`, `refs-broken`, `field-usage`, `migrate-gen`, and `webhooks health` alongside the raw API commands: each one reads the graph the API exposes piecewise and turns it into a single answer.
+
 **Every Contentful API command, plus a local SQLite mirror that makes orphan detection, full environment diffs, and SQL-driven bulk publishing one-liners.**
 
 The `contentful-pp-cli` binary wraps every Contentful surface (CMA, CDA, CPA, GraphQL, Images) and ships a local SQLite mirror of every space and environment. That mirror makes the questions every Contentful team writes a custom Node script for — "find orphans", "diff staging and master fully", "which entries have a broken reference", "generate a migration from this diff" — into one-liner commands with `--json` output, `--dry-run` guards, and rate-aware execution that respects `X-Contentful-RateLimit-*` headers.
@@ -521,7 +525,16 @@ This CLI is designed for AI agent consumption:
 - **Offline-friendly** - sync/search commands can use the local SQLite store when available
 - **Agent-safe by default** - no colors or formatting unless `--human-friendly` is set
 
-Exit codes: `0` success, `2` usage error, `3` not found, `4` auth error, `5` API error, `7` rate limited, `10` config error.
+Exit codes (Printing Press convention):
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 2 | Usage error (bad arguments or invalid config) |
+| 3 | Authentication error (token missing, expired, or lacks scope) |
+| 4 | Resource not found |
+| 5 | Rate limited — wait and retry |
+| 7 | Upstream server error |
 
 ## Use with Claude Code
 
@@ -607,12 +620,14 @@ Environment variables:
 | `CONTENTFUL_MANAGEMENT_TOKEN` | per_call | Yes | Set to your API credential. |
 
 ## Troubleshooting
-**Authentication errors (exit code 4)**
+**Authentication errors (exit code 3)**
 - Run `contentful-pp-cli doctor` to check credentials
 - Verify the environment variable is set: `echo $CONTENTFUL_MANAGEMENT_TOKEN`
-**Not found errors (exit code 3)**
+**Not found errors (exit code 4)**
 - Check the resource ID is correct
 - Run the `list` command to see available items
+**Rate limited (exit code 5)**
+- Back off and retry; for migrations use `migrate run --resumable --rate-aware`
 
 ### API-specific
 
